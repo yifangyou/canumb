@@ -24,10 +24,6 @@ var server = restify.createServer({
 });
 
 server.pre(restify.pre.userAgentConnection());
-server.use(restify.bodyParser({
-  mapParams : false,
-  maxBodySize : 1024 * 1024 /* 1024 kB = 1 MB */
-}));
 
 fs.readdir(apidir, function(err, files) {
   if (err)

@@ -19,6 +19,25 @@ var hashes = [
   'whirlpool'
 ];
 
+function apiBodyHandler(request, response, next)
+{
+  var self = this;
+  var bp = require('restify').bodyParser({
+    'mapParams' : false,
+    'multipartFileHandler' : function(part) {
+      self.hasher = crypto.createHash(request.params.algorithm);
+      part.on('data', function(data) {
+        self.hasher.update(data);
+      });
+    }
+  });
+
+  /* No need to reimplement the body parser */
+  bp[0](request, response, function() {
+    bp[1](request, response, next);
+  });
+}
+
 function api(request, response, next)
 {
   if (-1 === hashes.indexOf(request.params.algorithm)) {
@@ -45,37 +64,36 @@ function api(request, response, next)
         datacb(request.body.data);
         donecb();
       };
-    } else if (typeof request.files === 'object' && request.files.data !== undefined) {
-      /* multipart, and a file upload. The data is in a file on disk */
+    } else if (this.hasher) {
+      /* The hashing was performed during the upload by apiBodyHandler */
       dataProvider = function(datacb, donecb) {
-        var stream = fs.createReadStream(request.files.data.path);
-        stream.on('error', function(err) {
-          throw errors.InternalServerError(err.message);
-        });
-        stream.on('data', datacb)
-        stream.on('end', function() {
-          fs.unlink(request.files.data.path);
-          donecb();
-        });
+        donecb();
       };
     } else {
       throw new errors.MissingArgument('No data provided.');
     }
   }
 
-  if (!dataProvider) {
+  if (!dataProvider && !this.hasher) {
     throw new errors.MissingArgument('Data must be sent with \'application/json\' or \'multipart/form-data\'');
   }
 
-  var hasher = crypto.createHash(request.params.algorithm);
-  dataProvider(_.bind(hasher.update, hasher), function() {
-    var hashBuffer = hasher.digest();
+  var self = this;
+  var finished = function() {
+    var hashBuffer = self.hasher.digest();
     response.send({
       'hex'    : hashBuffer.toString('hex'),
       'base64' : hashBuffer.toString('base64')
     });
+    self.hasher = null;
     return next();
-  });
+  };
+
+  if (!this.hasher) {
+    this.hasher = crypto.createHash(request.params.algorithm);
+  }
+
+  dataProvider(_.bind(this.hasher.update, this.hasher), finished);
 }
 
 exports.api = 'hash';
@@ -117,4 +135,9 @@ exports.doc.errors = [
   }
 ];
 
-exports.entry = api;
+var ctx = {};
+
+exports.entry = [
+  _.bind(apiBodyHandler, ctx),
+  _.bind(api, ctx)
+];
